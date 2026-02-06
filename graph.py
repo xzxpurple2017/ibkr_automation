@@ -2,8 +2,8 @@ import signal
 from datetime import datetime, timedelta
 import pandas as pd
 import numpy as np
-import mplfinance as mpf
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract
@@ -189,33 +189,111 @@ class IBapi(EWrapper, EClient):
         
         print(f"Total annotations to add: {len(annotations)}")
         
-        # Create the plot
-        fig, axes = mpf.plot(df, 
-                             type='candle',
-                             style='charles',
-                             volume=True,
-                             title='SPX Index with TD Sequential & TD Combo',
-                             ylabel='Price (USD)',
-                             ylabel_lower='Volume',
-                             figsize=(14, 9),
-                             warn_too_much_data=1000,
-                             returnfig=True)
+        # Detect trading hours pattern to determine if we should close gaps
+        # Check time differences between consecutive bars
+        time_diffs = df.index.to_series().diff().dropna()
+        median_diff = time_diffs.median()
+        max_diff = time_diffs.max()
         
-        # Add annotations
-        ax = axes[0]
+        # If max gap is much larger than median (e.g., overnight/weekend gaps),
+        # this is likely a regular hours market - apply rangebreaks
+        has_gaps = max_diff > median_diff * 5
+        
+        print(f"Median bar interval: {median_diff}")
+        print(f"Max gap detected: {max_diff}")
+        print(f"Applying gap closure: {has_gaps}")
+        
+        # Create interactive plotly chart
+        fig = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.03,
+            row_heights=[0.7, 0.3],
+            subplot_titles=('SPX Index with TD Sequential & TD Combo', 'Volume')
+        )
+        
+        # Add candlestick chart
+        fig.add_trace(
+            go.Candlestick(
+                x=df.index,
+                open=df['Open'],
+                high=df['High'],
+                low=df['Low'],
+                close=df['Close'],
+                name='SPX',
+                increasing_line_color='green',
+                decreasing_line_color='red'
+            ),
+            row=1, col=1
+        )
+        
+        # Add volume bars
+        fig.add_trace(
+            go.Bar(
+                x=df.index,
+                y=df['Volume'],
+                name='Volume',
+                marker_color='lightgray',
+                showlegend=False
+            ),
+            row=2, col=1
+        )
+        
+        # Add annotations to plotly
+        plotly_annotations = []
         for ann in annotations:
-            ax.annotate(ann['text'], 
-                       xy=(ann['x'], ann['y']),
-                       xytext=(0, 5), 
-                       textcoords='offset points',
-                       ha='center',
-                       fontsize=ann['fontsize'],
-                       color=ann['color'],
-                       weight=ann.get('weight', 'normal'),
-                       style=ann.get('style', 'normal'))
+            plotly_annotations.append(
+                dict(
+                    x=df.index[ann['x']],
+                    y=ann['y'],
+                    text=ann['text'],
+                    showarrow=False,
+                    font=dict(
+                        size=ann['fontsize'],
+                        color=ann['color'],
+                        family='Arial Black' if ann.get('weight') == 'bold' else 'Arial'
+                    ),
+                    xref='x',
+                    yref='y'
+                )
+            )
         
-        plt.tight_layout()
-        plt.show()
+        # Build layout configuration
+        layout_config = dict(
+            annotations=plotly_annotations,
+            title='SPX Index - Interactive Candlestick Chart with TD Indicators',
+            yaxis_title='Price (USD)',
+            yaxis2_title='Volume',
+            xaxis_rangeslider_visible=False,
+            height=800,
+            hovermode='x unified',
+            template='plotly_white'
+        )
+        
+        # Add rangebreaks for regular market hours instruments (closes gaps)
+        # For 24-hour markets (crypto, some futures, forex), this won't apply
+        if has_gaps:
+            # Determine trading hours from the data
+            hours = df.index.hour.unique()
+            min_hour = hours.min()
+            max_hour = hours.max()
+            
+            layout_config['xaxis'] = dict(
+                rangebreaks=[
+                    dict(bounds=["sat", "mon"]),  # Hide weekends
+                    dict(bounds=[max_hour + 1, min_hour], pattern="hour")  # Hide overnight hours
+                ]
+            )
+            layout_config['xaxis2'] = dict(
+                rangebreaks=[
+                    dict(bounds=["sat", "mon"]),
+                    dict(bounds=[max_hour + 1, min_hour], pattern="hour")
+                ]
+            )
+        
+        fig.update_layout(**layout_config)
+        
+        fig.show()
         
         self.disconnect()
 
