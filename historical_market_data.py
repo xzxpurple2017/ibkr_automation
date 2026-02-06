@@ -5,7 +5,7 @@ from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract
 from ibapi.common import TickerId
 
-port = 4001
+port = 7496
 
 class IBapi(EWrapper, EClient):
     def __init__(self):
@@ -17,19 +17,14 @@ class IBapi(EWrapper, EClient):
 
     def start(self):
         contract = Contract()
-        # contract.symbol = "SPX"
-        # contract.secType = "IND"
-        # contract.exchange = "CBOE"
-        # contract.currency = "USD"
-
-        contract.symbol = "HSI"
+        contract.symbol = "SPX"
         contract.secType = "IND"
-        contract.exchange = "HKFE"
-        contract.currency = "HKD"
+        contract.exchange = "CBOE"
+        contract.currency = "USD"
 
         # Request historical data
         end_date_time = (datetime.now() - timedelta(days=7)).strftime("%Y%m%d-%H:%M:%S")
-        self.reqHistoricalData(1, contract, end_date_time, "1 W", "4 hours", "TRADES", 1, 1, False, [])
+        self.reqHistoricalData(1, contract, end_date_time, "1 W", "15 mins", "TRADES", 1, 1, False, [])
 
     def historicalData(self, reqId, bar):
         print(f"Date: {bar.date}, Open: {bar.open}, High: {bar.high}, Low: {bar.low}, Close: {bar.close}, Volume: {bar.volume}")
