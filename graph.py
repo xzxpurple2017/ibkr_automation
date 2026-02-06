@@ -8,8 +8,62 @@ from ibapi.client import EClient
 from ibapi.wrapper import EWrapper
 from ibapi.contract import Contract
 from ibapi.common import TickerId
+from calendar import monthrange
 
 port = 7496
+
+# Configuration
+SYMBOL = "ES"  # ES futures, change to "SPX" for index, "MES" for micro ES, etc.
+SEC_TYPE = "FUT"  # FUT for futures, IND for index, STK for stocks
+EXCHANGE = "CME"  # CME for ES futures, CBOE for SPX
+CURRENCY = "USD"
+CONTRACT_MONTH = None  # Set to None for auto (current front month), or specify like "202603" for March 2026
+DATA_DURATION = "3 W"  # How much historical data to fetch
+BAR_SIZE = "15 mins"  # Bar size
+
+def get_front_month_contract():
+    """Calculate the current front-month futures contract."""
+    now = datetime.now()
+    year = now.year
+    month = now.month
+    
+    # ES futures expire on 3rd Friday of contract month
+    # Find 3rd Friday of current month
+    def third_friday(year, month):
+        # Find first day of month and its weekday
+        first_day = datetime(year, month, 1)
+        # Friday is weekday 4
+        days_until_friday = (4 - first_day.weekday()) % 7
+        # First Friday
+        first_friday = 1 + days_until_friday
+        # Third Friday is 14 days later
+        third_friday_day = first_friday + 14
+        return datetime(year, month, third_friday_day)
+    
+    current_expiry = third_friday(year, month)
+    
+    # If we're within 5 days of expiry or past it, roll to next month
+    if now >= current_expiry - timedelta(days=5):
+        month += 1
+        if month > 12:
+            month = 1
+            year += 1
+    
+    # ES quarterly cycle: Mar(H), Jun(M), Sep(U), Dec(Z)
+    # But also has all months, use quarterly for main contracts
+    quarterly_months = [3, 6, 9, 12]  # H, M, U, Z
+    
+    # Find next quarterly month
+    for qm in quarterly_months:
+        if month <= qm:
+            month = qm
+            break
+    else:
+        # If past December, go to next year's March
+        month = 3
+        year += 1
+    
+    return f"{year}{month:02d}"
 
 def calculate_td_sequential(df):
     """Calculate TD Sequential Setup"""
@@ -112,13 +166,19 @@ class IBapi(EWrapper, EClient):
 
     def start(self):
         contract = Contract()
-        contract.symbol = "SPX"
-        contract.secType = "IND"
-        contract.exchange = "CBOE"
-        contract.currency = "USD"
+        contract.symbol = SYMBOL
+        contract.secType = SEC_TYPE
+        contract.exchange = EXCHANGE
+        contract.currency = CURRENCY
+        
+        # Set contract month for futures
+        if SEC_TYPE == "FUT":
+            contract.lastTradeDateOrContractMonth = CONTRACT_MONTH if CONTRACT_MONTH else get_front_month_contract()
+            print(f"Trading contract: {SYMBOL} {contract.lastTradeDateOrContractMonth}")
 
         # Request historical data - empty string means "now"
-        self.reqHistoricalData(1, contract, "", "2 W", "15 mins", "TRADES", 1, 1, False, [])
+        # useRTH = 0 to include all trading hours (extended/overnight), not just regular hours
+        self.reqHistoricalData(1, contract, "", DATA_DURATION, BAR_SIZE, "TRADES", 0, 1, False, [])
 
     def historicalData(self, reqId, bar):
         print(f"Date: {bar.date}, Open: {bar.open}, High: {bar.high}, Low: {bar.low}, Close: {bar.close}, Volume: {bar.volume}")
@@ -209,7 +269,7 @@ class IBapi(EWrapper, EClient):
             shared_xaxes=True,
             vertical_spacing=0.03,
             row_heights=[0.7, 0.3],
-            subplot_titles=('SPX Index with TD Sequential & TD Combo', 'Volume')
+            subplot_titles=(f'{SYMBOL} with TD Sequential & TD Combo', 'Volume')
         )
         
         # Add candlestick chart
@@ -220,7 +280,7 @@ class IBapi(EWrapper, EClient):
                 high=df['High'],
                 low=df['Low'],
                 close=df['Close'],
-                name='SPX',
+                name=SYMBOL,
                 increasing_line_color='green',
                 decreasing_line_color='red'
             ),
@@ -261,7 +321,7 @@ class IBapi(EWrapper, EClient):
         # Build layout configuration
         layout_config = dict(
             annotations=plotly_annotations,
-            title='SPX Index - Interactive Candlestick Chart with TD Indicators',
+            title=f'{SYMBOL} - Interactive Candlestick Chart with TD Indicators',
             yaxis_title='Price (USD)',
             yaxis2_title='Volume',
             xaxis_rangeslider_visible=False,
@@ -270,26 +330,9 @@ class IBapi(EWrapper, EClient):
             template='plotly_white'
         )
         
-        # Add rangebreaks for regular market hours instruments (closes gaps)
-        # For 24-hour markets (crypto, some futures, forex), this won't apply
-        if has_gaps:
-            # Determine trading hours from the data
-            hours = df.index.hour.unique()
-            min_hour = hours.min()
-            max_hour = hours.max()
-            
-            layout_config['xaxis'] = dict(
-                rangebreaks=[
-                    dict(bounds=["sat", "mon"]),  # Hide weekends
-                    dict(bounds=[max_hour + 1, min_hour], pattern="hour")  # Hide overnight hours
-                ]
-            )
-            layout_config['xaxis2'] = dict(
-                rangebreaks=[
-                    dict(bounds=["sat", "mon"]),
-                    dict(bounds=[max_hour + 1, min_hour], pattern="hour")
-                ]
-            )
+        # Don't apply rangebreaks - show all data continuously including weekend opens
+        # For futures that trade nearly 24/7, gaps are minimal and informative
+        print(f"Not closing gaps - showing all trading hours for futures")
         
         fig.update_layout(**layout_config)
         
